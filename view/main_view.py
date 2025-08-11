@@ -372,6 +372,9 @@ class MainView(QMainWindow):
     decrypt_signal = pyqtSignal()
     new_training_signal = pyqtSignal()
 
+    # Add the real_training_signal as a class attribute
+    real_training_signal = pyqtSignal()
+
     def __init__(self, controller):
         """Initialize the main window with a reference to the controller."""
         super().__init__()
@@ -442,6 +445,7 @@ class MainView(QMainWindow):
         model_menu.addAction(load_model_action)
 
         # View menu
+        self.real_training_btn = QPushButton("Train Decryption (Real Data)")
         view_menu = menu_bar.addMenu("&View")
 
         toggle_metrics_action = QAction("Show &Metrics", self)
@@ -452,6 +456,7 @@ class MainView(QMainWindow):
 
         toggle_graphs_action = QAction("Show &Graphs", self)
         toggle_graphs_action.setCheckable(True)
+        self.real_training_btn.setToolTip("Train the model using real data")
         toggle_graphs_action.setChecked(True)
         toggle_graphs_action.triggered.connect(self._on_toggle_graphs)
         view_menu.addAction(toggle_graphs_action)
@@ -462,6 +467,7 @@ class MainView(QMainWindow):
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+        self.real_training_btn.clicked.connect(self._on_real_train)
 
     def _create_video_display_area(self):
         """Create the video display area with original, encrypted, and decrypted videos."""
@@ -482,6 +488,30 @@ class MainView(QMainWindow):
 
         # Add the video layout to the main layout
         self.main_layout.addLayout(video_layout)
+
+    # Add a method to update video displays
+    def update_video_display(self, video_type, frames, fps=30):
+        """
+        Update one of the video panels with frames.
+
+        Args:
+            video_type: String indicating which video to update ("original", "encrypted", "decrypted")
+            frames: List of video frames to display
+            fps: Frames per second for playback
+        """
+        if video_type == "original":
+            self.original_video.set_frames(frames, fps)
+            self.encrypt_btn.setEnabled(True)
+        elif video_type == "encrypted":
+            self.encrypted_video.set_frames(frames, fps)
+            self.decrypt_btn.setEnabled(True)
+        elif video_type == "decrypted":
+            self.decrypted_video.set_frames(frames, fps)
+
+    def _on_real_train(self):
+        """Handle the real training button click."""
+        self.real_training_signal.emit()
+        self.status_label.setText("Training model with real data...")
 
     def _create_control_buttons(self):
         """Create the control buttons for the application."""
@@ -519,6 +549,8 @@ class MainView(QMainWindow):
         buttons_layout.addWidget(self.encrypt_btn)
         buttons_layout.addWidget(self.decrypt_btn)
         buttons_layout.addWidget(self.new_training_btn)
+        # Add the real training button here
+        buttons_layout.addWidget(self.real_training_btn)
 
         # Add some spacing
         buttons_layout.addStretch()
@@ -645,18 +677,51 @@ class MainView(QMainWindow):
         )
 
         if video_path:
+            # Show progress immediately
+            self.progress_bar.setValue(10)
+            self.status_label.setText(f"Loading video: {video_path}...")
+            self.set_ui_busy(True)
+
             # Emit signal to load the video
             self.load_video_signal.emit(video_path)
-            self.status_label.setText(f"Loaded video: {video_path}")
-            self.encrypt_btn.setEnabled(True)
+
+    def video_loaded_callback(self, result):
+        """
+        Handle completion of video loading.
+
+        Args:
+            result: Dictionary with loading results including frames
+        """
+        success = result.get("success", False)
+
+        if success:
+            frames = result.get("frames", [])
+            fps = result.get("fps", 30)
+
+            # Update the original video display
+            self.update_video_display("original", frames, fps)
+
+            self.status_label.setText(
+                f"Video loaded successfully: {len(frames)} frames"
+            )
+        else:
+            error = result.get("error", "Unknown error")
+            self.status_label.setText(f"Error loading video: {error}")
+
+        self.progress_bar.setValue(100)
+        self.set_ui_busy(False)
 
     def _on_encrypt(self):
         """Handle the encrypt button click."""
+        self.set_ui_busy(True)
+        self.progress_bar.setValue(10)
         self.encrypt_signal.emit()
         self.status_label.setText("Encrypting video...")
 
     def _on_decrypt(self):
         """Handle the decrypt button click."""
+        self.set_ui_busy(True)
+        self.progress_bar.setValue(10)
         self.decrypt_signal.emit()
         self.status_label.setText("Decrypting video...")
 

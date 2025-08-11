@@ -17,6 +17,7 @@ class VideoController(QObject):
 
     # Define signals
     video_loaded = pyqtSignal(object)  # Emits video data when loaded
+    loading_progress = pyqtSignal(int)  # Emits loading progress (0-100%)
 
     def __init__(self, encryption_model):
         """Initialize the video controller with a reference to the encryption model."""
@@ -37,12 +38,16 @@ class VideoController(QObject):
             video_path: Path to the video file
         """
         if not os.path.exists(video_path):
+            self.video_loaded.emit({"success": False, "error": "File not found"})
             return False
 
         try:
             # Load video file
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
+                self.video_loaded.emit(
+                    {"success": False, "error": "Could not open video file"}
+                )
                 return False
 
             # Get video properties
@@ -52,13 +57,25 @@ class VideoController(QObject):
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self.resolution = (width, height)
 
-            # Extract frames
+            # Extract frames with progress updates
             frames = []
-            for _ in range(self.frame_count):
+            progress_interval = max(1, self.frame_count // 100)
+
+            # Emit initial progress
+            self.loading_progress.emit(5)
+
+            for idx in range(self.frame_count):
                 ret, frame = cap.read()
                 if not ret:
                     break
                 frames.append(frame)
+
+                # Update progress bar every progress_interval frames
+                if idx % progress_interval == 0 or idx == self.frame_count - 1:
+                    percent = int(
+                        5 + (idx + 1) / self.frame_count * 90
+                    )  # 5-95% for loading
+                    self.loading_progress.emit(percent)
 
             cap.release()
 
@@ -72,12 +89,22 @@ class VideoController(QObject):
             }
 
             # Emit signal that video was loaded successfully
-            self.video_loaded.emit(self.current_video_data)
+            self.loading_progress.emit(100)
+            self.video_loaded.emit(
+                {
+                    "success": True,
+                    "frames": frames,
+                    "fps": self.fps,
+                    "resolution": self.resolution,
+                    "frame_count": self.frame_count,
+                }
+            )
 
             return True
 
         except Exception as e:
             print(f"Error loading video: {str(e)}")
+            self.video_loaded.emit({"success": False, "error": str(e)})
             return False
 
     def get_current_video(self):

@@ -8,6 +8,7 @@ Handles the initialization of views and connects UI events to model actions.
 """
 
 from PyQt5.QtCore import QObject
+import cv2
 from view.main_view import MainView
 from model.encryption_model import EncryptionModel
 from model.neural_network_model import NeuralNetworkModel
@@ -53,6 +54,7 @@ class MainController(QObject):
         self.main_view.new_training_signal.connect(
             self.training_controller.start_new_training
         )
+        self.main_view.real_training_signal.connect(self.process_real_training)
 
         # Connect model signals to view updates
         self.encryption_model.progress_updated.connect(self.main_view.update_progress)
@@ -64,11 +66,44 @@ class MainController(QObject):
         )
 
         # Connect video controller signals
-        self.video_controller.video_loaded.connect(self.display_original_video)
+        self.video_controller.video_loaded.connect(self.handle_video_loaded)
+        self.video_controller.loading_progress.connect(self.main_view.update_progress)
 
         # Connect encryption model signals for video display
         self.encryption_model.video_encrypted.connect(self.display_encrypted_video)
         self.encryption_model.video_decrypted.connect(self.display_decrypted_video)
+
+    def handle_video_loaded(self, result):
+        """
+        Handle the video loaded event and display the video.
+
+        Args:
+            result: Dictionary containing loading result and video data
+        """
+        if result.get("success", False):
+            self.display_original_video(result)
+        self.main_view.video_loaded_callback(result)
+
+    def process_real_training(self):
+        """Train the decryption model using real video frames from the loaded video."""
+        video_data = self.video_controller.get_current_video()
+        if video_data and "frames" in video_data and len(video_data["frames"]) > 0:
+            frames = video_data["frames"]
+            # Optionally, resize frames to model input shape
+            input_shape = self.neural_model.get_input_shape()
+            resized_frames = [
+                cv2.resize(f, (input_shape[1], input_shape[0])) for f in frames
+            ]
+            self.training_controller.train_decryption_on_real_video(
+                resized_frames, epochs=10, batch_size=32
+            )
+            self.main_view.status_label.setText(
+                "Decryption model trained on real data."
+            )
+        else:
+            self.main_view.status_label.setText(
+                "No video loaded for real-data training."
+            )
 
     def process_encryption(self):
         """Handle the encryption process."""
@@ -98,13 +133,15 @@ class MainController(QObject):
             video_data: Dictionary containing video frames and metadata
         """
         if video_data and "frames" in video_data and len(video_data["frames"]) > 0:
-            # Set frames for the video display widget
-            self.main_view.original_video.set_frames(
-                video_data["frames"], video_data.get("fps", 30)
+            # Update the main view with the video frames
+            self.main_view.update_video_display(
+                "original",
+                video_data["frames"],
+                video_data.get("fps", 30),
             )
-            self.main_view.status_label.setText(
-                f"Loaded video with {len(video_data['frames'])} frames"
-            )
+        else:
+            print("[DEBUG] No frames found in video_data or video_data is None")
+            self.main_view.status_label.setText("No frames found in loaded video.")
 
     def display_encrypted_video(self, encrypted_data):
         """
@@ -118,9 +155,11 @@ class MainController(QObject):
             and "frames" in encrypted_data
             and len(encrypted_data["frames"]) > 0
         ):
-            # Set frames for the video display widget
-            self.main_view.encrypted_video.set_frames(
-                encrypted_data["frames"], encrypted_data.get("fps", 30)
+            # Set frames in the encrypted video panel
+            self.main_view.update_video_display(
+                "encrypted",
+                encrypted_data["frames"],
+                encrypted_data.get("fps", 30),
             )
 
             # Calculate and display metrics between original and encrypted
@@ -147,9 +186,11 @@ class MainController(QObject):
             and "frames" in decrypted_data
             and len(decrypted_data["frames"]) > 0
         ):
-            # Set frames for the video display widget
-            self.main_view.decrypted_video.set_frames(
-                decrypted_data["frames"], decrypted_data.get("fps", 30)
+            # Set frames in the decrypted video panel
+            self.main_view.update_video_display(
+                "decrypted",
+                decrypted_data["frames"],
+                decrypted_data.get("fps", 30),
             )
 
             # Calculate and display metrics between original and decrypted

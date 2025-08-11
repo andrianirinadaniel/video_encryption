@@ -15,6 +15,45 @@ import cv2
 
 
 class NeuralNetworkModel(QObject):
+    def train_on_video_frames(
+        self, frames, epochs=10, batch_size=32, validation_split=0.1
+    ):
+        """
+        Train the decryption model to invert the encryption model using real video frames.
+
+        Args:
+            frames: List or array of video frames (numpy arrays, shape HxWx3, values 0-255)
+            epochs: Number of training epochs
+            batch_size: Batch size for training
+            validation_split: Fraction of data to use for validation
+        """
+        # Preprocess frames
+        X = []
+        Y = []
+        for frame in frames:
+            # Preprocess for network
+            orig = self._preprocess_frame_for_network(frame)
+            # Encrypt
+            encrypted = self.encryption_model.predict(orig)
+            # Store encrypted as input, original as target
+            X.append(encrypted[0])
+            Y.append(orig[0])
+        X = np.array(X)
+        Y = np.array(Y)
+
+        # Train decryption model: input is encrypted, target is original
+        print(f"Training decryption model on {len(X)} encrypted frames...")
+        history = self.decryption_model.fit(
+            X,
+            Y,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_split=validation_split,
+            callbacks=[],
+        )
+        self.save_models()
+        return history
+
     """Model for neural network operations."""
 
     # Signal for training progress updates

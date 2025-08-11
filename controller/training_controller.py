@@ -13,6 +13,31 @@ import threading
 
 
 class TrainingController(QObject):
+    def train_decryption_on_real_video(
+        self, frames, epochs=10, batch_size=32, validation_split=0.1
+    ):
+        """
+        Train the decryption model to invert the encryption model using real video frames.
+        Args:
+            frames: List of video frames (numpy arrays)
+            epochs: Number of epochs
+            batch_size: Batch size
+            validation_split: Fraction for validation
+        """
+        self.is_training = True
+        try:
+            history = self.neural_model.train_on_video_frames(
+                frames,
+                epochs=epochs,
+                batch_size=batch_size,
+                validation_split=validation_split,
+            )
+            self.training_history = history.history
+        except Exception as e:
+            print(f"Error during real-data training: {str(e)}")
+        finally:
+            self.is_training = False
+
     """Controller for neural network training operations."""
 
     def __init__(self, neural_model):
