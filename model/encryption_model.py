@@ -231,7 +231,7 @@ class EncryptionModel(QObject):
             Postprocessed frame ready for display
         """
         # Convert back to uint8 if needed
-        # output_frame = (frame * 255.0).astype('uint8')
+        output_frame = (frame * 255.0).astype("uint8")
         # For this example, we'll just return the frame as is
         return frame
 

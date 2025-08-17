@@ -8,6 +8,7 @@ Handles the initialization of views and connects UI events to model actions.
 """
 
 from PyQt5.QtCore import QObject
+from PyQt5.QtWidgets import QFileDialog
 import cv2
 from view.main_view import MainView
 from model.encryption_model import EncryptionModel
@@ -69,6 +70,14 @@ class MainController(QObject):
         self.video_controller.video_loaded.connect(self.handle_video_loaded)
         self.video_controller.loading_progress.connect(self.main_view.update_progress)
 
+        # Connect training controller signals
+        self.training_controller.progress_updated.connect(
+            self.main_view.update_progress
+        )
+        self.training_controller.status_updated.connect(
+            self.main_view.status_label.setText
+        )
+
         # Connect encryption model signals for video display
         self.encryption_model.video_encrypted.connect(self.display_encrypted_video)
         self.encryption_model.video_decrypted.connect(self.display_decrypted_video)
@@ -84,25 +93,84 @@ class MainController(QObject):
             self.display_original_video(result)
         self.main_view.video_loaded_callback(result)
 
+    def collect_training_frames(self):
+        """Collect frames from multiple videos for training."""
+
+        collected_frames = []
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self.main_view,
+            "Select Training Videos",
+            "",
+            "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*.*)",
+        )
+
+        if not file_paths:
+            # If no videos selected, try to use the currently loaded video
+            video_data = self.video_controller.get_current_video()
+            if video_data and "frames" in video_data and len(video_data["frames"]) > 0:
+                frames = video_data["frames"]
+                input_shape = self.neural_model.get_input_shape()
+                collected_frames = [
+                    cv2.resize(f, (input_shape[1], input_shape[0])) for f in frames
+                ]
+                self.main_view.status_label.setText(
+                    f"Using current video: {len(collected_frames)} frames"
+                )
+            return collected_frames
+
+        self.main_view.status_label.setText(
+            f"Loading {len(file_paths)} videos for training..."
+        )
+        self.main_view.progress_bar.setValue(0)
+
+        total_files = len(file_paths)
+        for i, path in enumerate(file_paths):
+            # Update progress
+            progress = int((i / total_files) * 100)
+            self.main_view.progress_bar.setValue(progress)
+
+            # Extract frames using video controller's method but don't update UI
+            import os
+            from utils.video_utils import extract_frames_from_video
+
+            if os.path.exists(path):
+                result = extract_frames_from_video(path)
+                if result:
+                    frames, fps, resolution, _ = result
+                    # Resize frames to model input shape
+                    input_shape = self.neural_model.get_input_shape()
+                    resized_frames = [
+                        cv2.resize(f, (input_shape[1], input_shape[0])) for f in frames
+                    ]
+                    collected_frames.extend(resized_frames)
+                    self.main_view.status_label.setText(
+                        f"Collected {len(collected_frames)} frames so far..."
+                    )
+
+        self.main_view.progress_bar.setValue(100)
+        self.main_view.status_label.setText(
+            f"Training data collection complete: {len(collected_frames)} frames"
+        )
+        return collected_frames
+
     def process_real_training(self):
-        """Train the decryption model using real video frames from the loaded video."""
-        video_data = self.video_controller.get_current_video()
-        if video_data and "frames" in video_data and len(video_data["frames"]) > 0:
-            frames = video_data["frames"]
-            # Optionally, resize frames to model input shape
-            input_shape = self.neural_model.get_input_shape()
-            resized_frames = [
-                cv2.resize(f, (input_shape[1], input_shape[0])) for f in frames
-            ]
+        """Train the decryption model using real video frames from multiple sources."""
+        # Collect frames from multiple videos
+        frames = self.collect_training_frames()
+
+        if frames and len(frames) > 0:
+            self.main_view.status_label.setText(
+                f"Training decryption model with {len(frames)} frames..."
+            )
             self.training_controller.train_decryption_on_real_video(
-                resized_frames, epochs=10, batch_size=32
+                frames, epochs=10, batch_size=32, augment_data=True
             )
             self.main_view.status_label.setText(
                 "Decryption model trained on real data."
             )
         else:
             self.main_view.status_label.setText(
-                "No video loaded for real-data training."
+                "No videos available for real-data training."
             )
 
     def process_encryption(self):
