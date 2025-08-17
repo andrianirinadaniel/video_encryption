@@ -409,6 +409,9 @@ class MainView(QMainWindow):
         # Apply dark theme styling
         self._apply_styling()
 
+        # Initially disable the real training button
+        self.real_training_btn.setEnabled(False)
+
     def _create_menu_bar(self):
         """Create and populate the menu bar."""
         menu_bar = self.menuBar()
@@ -445,7 +448,6 @@ class MainView(QMainWindow):
         model_menu.addAction(load_model_action)
 
         # View menu
-        self.real_training_btn = QPushButton("Train Decryption (Real Data)")
         view_menu = menu_bar.addMenu("&View")
 
         toggle_metrics_action = QAction("Show &Metrics", self)
@@ -456,7 +458,6 @@ class MainView(QMainWindow):
 
         toggle_graphs_action = QAction("Show &Graphs", self)
         toggle_graphs_action.setCheckable(True)
-        self.real_training_btn.setToolTip("Train the model using real data")
         toggle_graphs_action.setChecked(True)
         toggle_graphs_action.triggered.connect(self._on_toggle_graphs)
         view_menu.addAction(toggle_graphs_action)
@@ -467,6 +468,10 @@ class MainView(QMainWindow):
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+
+        # Initialize the real_training_btn here - but it will be added to layout in _create_control_buttons
+        self.real_training_btn = QPushButton("Train Decryption (Real Data)")
+        self.real_training_btn.setToolTip("Train the model using real data")
         self.real_training_btn.clicked.connect(self._on_real_train)
 
     def _create_video_display_area(self):
@@ -491,22 +496,21 @@ class MainView(QMainWindow):
 
     # Add a method to update video displays
     def update_video_display(self, video_type, frames, fps=30):
-        """
-        Update one of the video panels with frames.
-
-        Args:
-            video_type: String indicating which video to update ("original", "encrypted", "decrypted")
-            frames: List of video frames to display
-            fps: Frames per second for playback
-        """
+        """Update a video display with new frames."""
         if video_type == "original":
             self.original_video.set_frames(frames, fps)
+            # Enable encrypt button and real training now that video is loaded
             self.encrypt_btn.setEnabled(True)
+            self.real_training_btn.setEnabled(True)
+            self.status_label.setText(f"Original video loaded: {len(frames)} frames")
         elif video_type == "encrypted":
             self.encrypted_video.set_frames(frames, fps)
+            # Enable decrypt button now that video is encrypted
             self.decrypt_btn.setEnabled(True)
+            self.status_label.setText(f"Video encrypted: {len(frames)} frames")
         elif video_type == "decrypted":
             self.decrypted_video.set_frames(frames, fps)
+            self.status_label.setText(f"Video decrypted: {len(frames)} frames")
 
     def _on_real_train(self):
         """Handle the real training button click."""
@@ -822,9 +826,32 @@ class MainView(QMainWindow):
             busy: True if processing, False otherwise
         """
         self.load_btn.setEnabled(not busy)
-        self.encrypt_btn.setEnabled(not busy)
-        self.decrypt_btn.setEnabled(not busy)
-        self.new_training_btn.setEnabled(not busy)
+
+        # Only restore previous button states when not busy
+        if not busy:
+            # Check if video is loaded (if original video has frames)
+            video_loaded = (
+                hasattr(self.original_video, "frames")
+                and len(self.original_video.frames) > 0
+            )
+
+            # Check if video is encrypted (if encrypted video has frames)
+            video_encrypted = (
+                hasattr(self.encrypted_video, "frames")
+                and len(self.encrypted_video.frames) > 0
+            )
+
+            # Set button states based on application state
+            self.encrypt_btn.setEnabled(video_loaded)
+            self.decrypt_btn.setEnabled(video_encrypted)
+            self.new_training_btn.setEnabled(True)
+            self.real_training_btn.setEnabled(video_loaded)
+        else:
+            # Disable all processing buttons when busy
+            self.encrypt_btn.setEnabled(False)
+            self.decrypt_btn.setEnabled(False)
+            self.new_training_btn.setEnabled(False)
+            self.real_training_btn.setEnabled(False)
 
         if not busy:
             self.progress_bar.setValue(0)

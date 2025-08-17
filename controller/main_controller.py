@@ -8,6 +8,7 @@ Handles the initialization of views and connects UI events to model actions.
 """
 
 from PyQt5.QtCore import QObject
+from PyQt5.QtWidgets import QMessageBox
 import cv2
 from view.main_view import MainView
 from model.encryption_model import EncryptionModel
@@ -54,6 +55,7 @@ class MainController(QObject):
         self.main_view.new_training_signal.connect(
             self.training_controller.start_new_training
         )
+        # Add this connection for the real training button
         self.main_view.real_training_signal.connect(self.process_real_training)
 
         # Connect model signals to view updates
@@ -74,44 +76,90 @@ class MainController(QObject):
         self.encryption_model.video_decrypted.connect(self.display_decrypted_video)
 
     def handle_video_loaded(self, result):
-        """
-        Handle the video loaded event and display the video.
+        """Handle the video loaded event from the video controller."""
+        if result["success"]:
+            # Update the original video player with the loaded frames
+            frames = result["frames"]
+            fps = result["fps"]
+            self.main_view.update_video_display("original", frames, fps)
 
-        Args:
-            result: Dictionary containing loading result and video data
-        """
-        if result.get("success", False):
-            self.display_original_video(result)
-        self.main_view.video_loaded_callback(result)
+            # Enable encrypt button after video is loaded successfully
+            self.main_view.encrypt_btn.setEnabled(True)
+
+            # Update status
+            self.main_view.status_label.setText(f"Video loaded: {len(frames)} frames")
+        else:
+            # Show error message
+            error_msg = result.get("error", "Unknown error")
+            QMessageBox.critical(self.main_view, "Error Loading Video", error_msg)
 
     def process_real_training(self):
-        """Train the decryption model using real video frames from the loaded video."""
+        """Train using real video frames."""
         video_data = self.video_controller.get_current_video()
-        if video_data and "frames" in video_data and len(video_data["frames"]) > 0:
-            frames = video_data["frames"]
-            # Optionally, resize frames to model input shape
-            input_shape = self.neural_model.get_input_shape()
-            resized_frames = [
-                cv2.resize(f, (input_shape[1], input_shape[0])) for f in frames
-            ]
-            self.training_controller.train_decryption_on_real_video(
-                resized_frames, epochs=10, batch_size=32
+
+        if (
+            not video_data
+            or "frames" not in video_data
+            or len(video_data["frames"]) == 0
+        ):
+            QMessageBox.warning(
+                self.main_view, "No Video", "Please load a video first!"
             )
-            self.main_view.status_label.setText(
-                "Decryption model trained on real data."
-            )
-        else:
-            self.main_view.status_label.setText(
-                "No video loaded for real-data training."
-            )
+            return
+
+        self.main_view.update_progress(10)
+        self.main_view.status_label.setText("Training with real video data...")
+
+        # Use your existing train_on_video_frames method
+        result = self.neural_model.train_on_video_frames(
+            video_data["frames"], epochs=20, batch_size=16, validation_split=0.2
+        )
+
+        self.main_view.update_progress(100)
+        self.main_view.status_label.setText("Training completed!")
 
     def process_encryption(self):
         """Handle the encryption process."""
         video_data = self.video_controller.get_current_video()
-        if video_data is not None:
-            # Start encryption in a separate thread
-            self.encryption_model.encrypt_video(video_data, self.neural_model)
-            self.main_view.set_ui_busy(True)
+
+        if not video_data or "frames" not in video_data:
+            self.main_view.status_label.setText("No video loaded for encryption")
+            return
+
+        # Set UI to busy state
+        self.main_view.set_ui_busy(True)
+
+        try:
+            # Get original frames
+            original_frames = video_data["frames"]
+            fps = video_data.get("fps", 30)
+
+            # Encrypt frames
+            encrypted_frames = self.encryption_model.encrypt_video(original_frames)
+
+            # Update UI with encrypted frames
+            self.main_view.update_video_display("encrypted", encrypted_frames, fps)
+
+            # Calculate metrics between original and encrypted frames
+            metrics = self.metrics_controller.calculate_metrics(
+                original_frames, encrypted_frames
+            )
+
+            # Update metrics display
+            self.main_view.metrics_display.update_metrics(metrics)
+
+            # Store encrypted frames for later use
+            self.encrypted_frames = encrypted_frames
+
+            # Update status
+            self.main_view.status_label.setText("Video encrypted successfully")
+
+        except Exception as e:
+            self.main_view.status_label.setText(f"Error during encryption: {str(e)}")
+
+        finally:
+            # Set UI back to ready state
+            self.main_view.set_ui_busy(False)
 
     def process_decryption(self):
         """Handle the decryption process."""
@@ -204,3 +252,8 @@ class MainController(QObject):
                     original_frame, decrypted_frame
                 )
                 self.main_view.metrics_display.update_metrics(metrics)
+
+    def _on_train_new_model(self):
+        """Handle the new training button click."""
+        self.new_training_signal.emit(epochs=20, batch_size=32)
+        self.status_label.setText("Training new model with extended epochs...")

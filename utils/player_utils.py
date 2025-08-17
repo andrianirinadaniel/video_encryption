@@ -30,28 +30,49 @@ class VideoPlayer(QObject):
         self.timer = QTimer()
         self.timer.timeout.connect(self._next_frame)
 
-    def load_video(self, video_data):
+    def set_frames(self, frames, fps=None):
         """
-        Load video data for playback.
+        Set frames for playback from memory.
 
         Args:
-            video_data: Dictionary containing video frames and metadata
+            frames: List of frames to play
+            fps: Optional frames per second (uses current fps if None)
         """
-        if video_data and "frames" in video_data:
-            self.frames = video_data["frames"]
-            self.fps = video_data.get("fps", 30)
-            self.current_frame_idx = 0
-
-            # Set timer interval based on fps
-            interval = int(1000 / self.fps)  # Convert fps to milliseconds
+        self.frames = frames
+        if fps is not None:
+            self.fps = fps
+            interval = int(1000 / self.fps)
             self.timer.setInterval(interval)
 
-            # Emit the first frame
-            if len(self.frames) > 0:
-                self.frame_changed.emit(self.frames[0], 0)
+        self.current_frame_idx = 0
 
-            return True
-        return False
+        # Emit first frame if available
+        if len(self.frames) > 0:
+            self.frame_changed.emit(self.frames[0], 0)
+
+        return len(self.frames) > 0
+
+    def load_video(self, video_path):
+        """Load video file for streaming playback."""
+        self.cap = cv2.VideoCapture(video_path)
+        if not self.cap.isOpened():
+            return False
+
+        self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        self.current_frame_idx = 0
+
+        # Set timer interval based on fps
+        interval = int(1000 / self.fps)
+        self.timer.setInterval(interval)
+
+        # Read and emit first frame
+        ret, frame = self.cap.read()
+        if ret:
+            self.frame_changed.emit(frame, 0)
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Reset to beginning
+
+        return ret
 
     def play(self):
         """Start playing the video."""

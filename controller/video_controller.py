@@ -57,24 +57,46 @@ class VideoController(QObject):
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self.resolution = (width, height)
 
-            # Extract frames with progress updates
-            frames = []
+            # Define max frames to extract for UI
+            max_frames = 200  # Limit to reasonable number for UI
+            sampling_rate = max(1, self.frame_count // max_frames)
             progress_interval = max(1, self.frame_count // 100)
+
+            # Extract frames with resizing and sampling
+            frames = []
+            max_resolution = (640, 480)  # Reasonable UI size
 
             # Emit initial progress
             self.loading_progress.emit(5)
 
-            for idx in range(self.frame_count):
+            for idx in range(0, self.frame_count, sampling_rate):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
                 ret, frame = cap.read()
                 if not ret:
                     break
+
+                # Resize frame for UI display
+                if (
+                    frame.shape[1] > max_resolution[0]
+                    or frame.shape[0] > max_resolution[1]
+                ):
+                    aspect_ratio = frame.shape[1] / frame.shape[0]
+                    if frame.shape[1] > frame.shape[0]:
+                        new_width = max_resolution[0]
+                        new_height = int(new_width / aspect_ratio)
+                    else:
+                        new_height = max_resolution[1]
+                        new_width = int(new_height * aspect_ratio)
+                    frame = cv2.resize(frame, (new_width, new_height))
+
                 frames.append(frame)
 
-                # Update progress bar every progress_interval frames
-                if idx % progress_interval == 0 or idx == self.frame_count - 1:
-                    percent = int(
-                        5 + (idx + 1) / self.frame_count * 90
-                    )  # 5-95% for loading
+                # Update progress bar (based on frame count, not sampled count)
+                if (
+                    idx % progress_interval == 0
+                    or idx >= self.frame_count - sampling_rate
+                ):
+                    percent = int(5 + (idx + 1) / self.frame_count * 90)
                     self.loading_progress.emit(percent)
 
             cap.release()
@@ -85,7 +107,8 @@ class VideoController(QObject):
                 "frames": frames,
                 "fps": self.fps,
                 "resolution": self.resolution,
-                "frame_count": self.frame_count,
+                "frame_count": len(frames),  # Note: now using actual loaded frame count
+                "original_frame_count": self.frame_count,  # Store original count separately
             }
 
             # Emit signal that video was loaded successfully
@@ -96,7 +119,8 @@ class VideoController(QObject):
                     "frames": frames,
                     "fps": self.fps,
                     "resolution": self.resolution,
-                    "frame_count": self.frame_count,
+                    "frame_count": len(frames),
+                    "original_frame_count": self.frame_count,
                 }
             )
 

@@ -14,12 +14,36 @@ import os
 import cv2
 
 
+class ProgressCallback(tf.keras.callbacks.Callback):
+    """Custom callback to emit progress updates during training."""
+
+    def __init__(self, model_instance):
+        super().__init__()
+        self.model_instance = model_instance
+
+    def on_epoch_end(self, epoch, logs=None):
+        """Emit progress signal at the end of each epoch."""
+        if logs is None:
+            logs = {}
+
+        # Send progress update with current epoch info
+        progress_data = {
+            "epoch": epoch + 1,
+            "accuracy": logs.get("accuracy", 0),
+            "loss": logs.get("loss", 0),
+            "val_accuracy": logs.get("val_accuracy", 0),
+            "val_loss": logs.get("val_loss", 0),
+        }
+
+        self.model_instance.training_progress.emit(progress_data)
+
+
 class NeuralNetworkModel(QObject):
     def train_on_video_frames(
-        self, frames, epochs=10, batch_size=32, validation_split=0.1
+        self, frames, epochs=20, batch_size=16, validation_split=0.2
     ):
         """
-        Train the decryption model to invert the encryption model using real video frames.
+        Train the decryption model using real video frames.
 
         Args:
             frames: List or array of video frames (numpy arrays, shape HxWx3, values 0-255)
@@ -28,30 +52,61 @@ class NeuralNetworkModel(QObject):
             validation_split: Fraction of data to use for validation
         """
         # Preprocess frames
-        X = []
-        Y = []
-        for frame in frames:
-            # Preprocess for network
-            orig = self._preprocess_frame_for_network(frame)
-            # Encrypt
-            encrypted = self.encryption_model.predict(orig)
-            # Store encrypted as input, original as target
-            X.append(encrypted[0])
-            Y.append(orig[0])
-        X = np.array(X)
-        Y = np.array(Y)
+        processed_frames = []
+        encrypted_frames = []
 
-        # Train decryption model: input is encrypted, target is original
-        print(f"Training decryption model on {len(X)} encrypted frames...")
+        for frame in frames:
+            # Convert to float and normalize
+            norm_frame = frame.astype(np.float32) / 255.0
+
+            # Resize if needed
+            if norm_frame.shape[:2] != self.input_shape[:2]:
+                norm_frame = cv2.resize(
+                    norm_frame, (self.input_shape[1], self.input_shape[0])
+                )
+
+            # Generate encrypted version using the encryption model
+            encrypted = self.encrypt_frame(norm_frame)
+
+            processed_frames.append(norm_frame)
+            encrypted_frames.append(encrypted)
+
+        # Convert to numpy arrays
+        X = np.array(encrypted_frames)  # Encrypted frames (input)
+        Y = np.array(processed_frames)  # Original frames (target)
+
+        # Split into training and validation sets
+        val_size = int(len(X) * validation_split)
+        if val_size > 0:
+            X_train, X_val = X[:-val_size], X[-val_size:]
+            Y_train, Y_val = Y[:-val_size], Y[-val_size:]
+            validation_data = (X_val, Y_val)
+        else:
+            X_train, Y_train = X, Y
+            validation_data = None
+
+        # Train the decryption model only
+        print(
+            f"Training decryption model with {len(X_train)} frames and {val_size} validation frames"
+        )
+
+        # Use early stopping
+        early_stopping = tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=5, restore_best_weights=True
+        )
+
         history = self.decryption_model.fit(
-            X,
-            Y,
+            X_train,
+            Y_train,
             epochs=epochs,
             batch_size=batch_size,
-            validation_split=validation_split,
-            callbacks=[],
+            validation_data=validation_data,
+            callbacks=[ProgressCallback(self), early_stopping],
         )
+
+        # Save the model after training
         self.save_models()
+
         return history
 
     """Model for neural network operations."""
@@ -69,46 +124,43 @@ class NeuralNetworkModel(QObject):
         self._load_pretrained_models()
 
     def _build_models(self):
-        """Build the neural network models for encryption and decryption."""
-        # Encryption model
+        """Build more advanced neural network models."""
+        # Encryption model with residual connections and batch normalization
         enc_input = tf.keras.layers.Input(shape=self.input_shape)
 
-        # Encoder layers
-        x = tf.keras.layers.Conv2D(32, (3, 3), activation="relu", padding="same")(
-            enc_input
-        )
-        x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
-        x = tf.keras.layers.Conv2D(64, (3, 3), activation="relu", padding="same")(x)
-        x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
+        # Initial convolution
+        x = tf.keras.layers.Conv2D(64, (3, 3), padding="same")(enc_input)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Activation("relu")(x)
 
-        # Transformer layers
-        x = tf.keras.layers.Conv2D(64, (3, 3), activation="relu", padding="same")(x)
+        # Add residual blocks
+        for _ in range(3):
+            residual = x
+            x = tf.keras.layers.Conv2D(64, (3, 3), padding="same")(x)
+            x = tf.keras.layers.BatchNormalization()(x)
+            x = tf.keras.layers.Activation("relu")(x)
+            x = tf.keras.layers.Conv2D(64, (3, 3), padding="same")(x)
+            x = tf.keras.layers.BatchNormalization()(x)
+            x = tf.keras.layers.Add()([x, residual])
+            x = tf.keras.layers.Activation("relu")(x)
 
-        # Decoder layers
-        x = tf.keras.layers.Conv2D(64, (3, 3), activation="relu", padding="same")(x)
-        x = tf.keras.layers.UpSampling2D((2, 2))(x)
-        x = tf.keras.layers.Conv2D(32, (3, 3), activation="relu", padding="same")(x)
-        x = tf.keras.layers.UpSampling2D((2, 2))(x)
-
-        # Output layer
+        # Final convolution to output
+        x = tf.keras.layers.Conv2D(32, (3, 3), padding="same")(x)
+        x = tf.keras.layers.BatchNormalization()(x)
+        x = tf.keras.layers.Activation("relu")(x)
         enc_output = tf.keras.layers.Conv2D(
             3, (3, 3), activation="sigmoid", padding="same"
         )(x)
 
-        # Create the encryption model
+        # Create model
         self.encryption_model = tf.keras.Model(enc_input, enc_output)
-
-        # Create a custom optimizer with explicit configuration
-        optimizer = tf.keras.optimizers.Adam(
-            learning_rate=0.001,
-            beta_1=0.9,
-            beta_2=0.999,
-            epsilon=1e-07,
-            name="adam_encryption",
-        )
-
         self.encryption_model.compile(
-            optimizer=optimizer, loss="mse", metrics=["accuracy"]
+            optimizer="adam",
+            loss="mse",  # Mean squared error is good
+            metrics=[
+                tf.keras.metrics.MeanSquaredError(),
+                "mae",
+            ],  # Add mean absolute error
         )
 
         # Decryption model (similar architecture but can be different)
@@ -149,7 +201,9 @@ class NeuralNetworkModel(QObject):
         )
 
         self.decryption_model.compile(
-            optimizer=optimizer, loss="mse", metrics=["accuracy"]
+            optimizer=optimizer,
+            loss="mse",
+            metrics=[tf.keras.metrics.MeanSquaredError(), "mae"],
         )
 
     def _load_pretrained_models(self):
@@ -259,43 +313,17 @@ class NeuralNetworkModel(QObject):
         self._build_models()
 
     def train(self, X_train, y_train, validation_data=None, epochs=10, batch_size=32):
-        """
-        Train the neural network models.
+        """Train with learning rate schedule."""
 
-        Args:
-            X_train: Training data
-            y_train: Target data
-            validation_data: Optional validation data tuple (X_val, y_val)
-            epochs: Number of training epochs
-            batch_size: Batch size for training
+        # Learning rate schedule
+        lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=0.001, decay_steps=1000, decay_rate=0.9
+        )
 
-        Returns:
-            Training history
-        """
-        # Reset models if needed to avoid optimizer variable conflicts
-        print("Starting training with recompiled optimizers")
-
-        # Custom callback to emit progress updates
-        class ProgressCallback(tf.keras.callbacks.Callback):
-            def __init__(self, model_instance):
-                self.model_instance = model_instance
-
-            def on_epoch_end(self, epoch, logs=None):
-                logs = logs or {}
-                progress_data = {
-                    "epoch": epoch + 1,
-                    "total_epochs": epochs,
-                    "loss": logs.get("loss", 0),
-                    "accuracy": logs.get("accuracy", 0),
-                    "val_loss": logs.get("val_loss", 0),
-                    "val_accuracy": logs.get("val_accuracy", 0),
-                }
-                self.model_instance.training_progress.emit(progress_data)
-
-        # Recompile models with fresh optimizers to avoid variable conflicts
+        # Recompile encryption model with lr schedule
         print("Recompiling encryption model with fresh optimizer")
         self.encryption_model.compile(
-            optimizer="adam",  # This creates a new Adam optimizer instance
+            optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule),
             loss="mse",
             metrics=["accuracy"],
         )
